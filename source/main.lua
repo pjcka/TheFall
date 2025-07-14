@@ -441,10 +441,6 @@ function playdate.update()
             thrustY + #thrust * thrustLetterSpacing + 10)
         gfx.drawLine(thrustX + 5, thrustY + #thrust * thrustLetterSpacing + 5, thrustX,
             thrustY + #thrust * thrustLetterSpacing + 10)
-        -- Show both control options
-        local controlsText = "B/↓"
-        local controlsWidth = gfx.getTextSize(controlsText)
-        gfx.drawText(controlsText, thrustX - controlsWidth / 2, thrustY + #thrust * thrustLetterSpacing + 15)
 
         -- Draw "START" vertically above A button (right side, lower)
         local startX = 365
