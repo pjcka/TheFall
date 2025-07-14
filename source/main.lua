@@ -107,8 +107,8 @@ function Lander:update()
     self.angle = crankPosition
     self:setRotation(self.angle)
 
-    -- Handle thrust input (B button)
-    if playdate.buttonIsPressed(playdate.kButtonB) then
+    -- Handle thrust input (B button or Down arrow)
+    if playdate.buttonIsPressed(playdate.kButtonB) or playdate.buttonIsPressed(playdate.kButtonDown) then
         -- Calculate thrust vector based on angle
         local thrustAngle = math.rad(self.angle - 90) -- -90 because 0 degrees points up
         self.vx += math.cos(thrustAngle) * THRUST_POWER
@@ -441,6 +441,10 @@ function playdate.update()
             thrustY + #thrust * thrustLetterSpacing + 10)
         gfx.drawLine(thrustX + 5, thrustY + #thrust * thrustLetterSpacing + 5, thrustX,
             thrustY + #thrust * thrustLetterSpacing + 10)
+        -- Show both control options
+        local controlsText = "B/↓"
+        local controlsWidth = gfx.getTextSize(controlsText)
+        gfx.drawText(controlsText, thrustX - controlsWidth / 2, thrustY + #thrust * thrustLetterSpacing + 15)
 
         -- Draw "START" vertically above A button (right side, lower)
         local startX = 365
