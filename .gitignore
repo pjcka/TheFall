@@ -1,0 +1,32 @@
+# OS-specific files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Playdate build artifacts
+*.pdx/
+builds/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Lua language server
+.luarc.json
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+*.log
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# Debug files
+*.debug

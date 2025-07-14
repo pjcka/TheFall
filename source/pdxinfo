@@ -1,0 +1,7 @@
+name=The Fall
+author=Game Developer
+description=A modern lunar lander game with wind, clouds, and power-ups. Master gravity and thrust to land safely!
+bundleID=com.gamedev.thefall
+version=0.0.3
+buildNumber=2
+imagePath=images/launcher
