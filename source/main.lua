@@ -31,6 +31,9 @@ local showLandingScore = false        -- Whether to show +#### score
 local restartFlashTimer = 0           -- Timer for flashing restart indicator
 local sessionActive = false           -- Whether a timed session is active
 local demoLander = nil                -- Demo lander for title screen
+local highScore = 0                   -- Highest score achieved
+local newHighScore = false            -- Whether current score is a new high score
+local crashReason = ""                -- Reason for crash to display
 
 -- Lander class
 class('Lander').extends(gfx.sprite)
@@ -176,12 +179,15 @@ function Lander:update()
             -- Pine tree collision (triangular)
             local treeHeight = 27
             local treeWidth = 8
-            -- Simple bounding box check for triangle
-            if newX > tree.x - treeWidth - landerHalfSize and
-                newX < tree.x + treeWidth + landerHalfSize and
-                newY > GROUND_HEIGHT - treeHeight - landerHalfSize and
+            -- More precise triangular collision
+            if newY > GROUND_HEIGHT - treeHeight - landerHalfSize and
                 newY < GROUND_HEIGHT + landerHalfSize then
-                treeCollision = true
+                -- Calculate triangle width at lander's Y position
+                local yFromBottom = GROUND_HEIGHT - newY
+                local widthAtY = treeWidth * (yFromBottom / treeHeight)
+                if math.abs(newX - tree.x) < widthAtY + landerHalfSize then
+                    treeCollision = true
+                end
             end
         elseif tree.type == 2 then
             -- Lollipop tree collision (circular top + trunk)
@@ -211,17 +217,32 @@ function Lander:update()
                 newY < GROUND_HEIGHT + landerHalfSize then
                 treeCollision = true
             end
-            -- Check frond collision (simplified box at top)
-            if newX > tree.x - 9 - landerHalfSize and
-                newX < tree.x + 9 + landerHalfSize and
-                newY > GROUND_HEIGHT - trunkHeight - 9 - landerHalfSize and
-                newY < GROUND_HEIGHT - trunkHeight + landerHalfSize then
-                treeCollision = true
+            -- Check frond collision (three lines)
+            local frondY = GROUND_HEIGHT - trunkHeight
+            -- Check if lander is in frond area
+            if newY > frondY - 9 - landerHalfSize and newY < frondY + landerHalfSize then
+                -- Check collision with each frond line
+                -- Left frond
+                if math.abs(newX - (tree.x - 4.5)) < 4.5 + landerHalfSize and
+                    math.abs(newY - (frondY - 2.5)) < 2.5 + landerHalfSize then
+                    treeCollision = true
+                end
+                -- Right frond
+                if math.abs(newX - (tree.x + 4.5)) < 4.5 + landerHalfSize and
+                    math.abs(newY - (frondY - 2.5)) < 2.5 + landerHalfSize then
+                    treeCollision = true
+                end
+                -- Center frond
+                if math.abs(newX - tree.x) < 1 + landerHalfSize and
+                    math.abs(newY - (frondY - 4.5)) < 4.5 + landerHalfSize then
+                    treeCollision = true
+                end
             end
         end
 
         if treeCollision then
             gameState = "crashed"
+            crashReason = "Tree"
             self.thrustParticles = {}
             self:createExplosion()
             print("Crash! Hit a tree!")
@@ -232,10 +253,10 @@ function Lander:update()
     -- Check ground collision
     -- Lander needs to be 1px above the dither pattern (which starts at GROUND_HEIGHT)
     if newY >= GROUND_HEIGHT - 9 then
-        -- Check if in landing zone (entire ship must be within zone, with 2px buffer)
+        -- Check if in landing zone (entire ship must be within zone, with 4px buffer)
         local shipHalfWidth = 8 -- Ship is 16 pixels wide
-        local inLandingZone = newX - shipHalfWidth >= landingZoneX - 2 and
-            newX + shipHalfWidth <= landingZoneX + landingZoneWidth + 2
+        local inLandingZone = newX - shipHalfWidth >= landingZoneX - 4 and
+            newX + shipHalfWidth <= landingZoneX + landingZoneWidth + 4
 
         -- Normalize angle to -180 to 180 range
         local normalizedAngle = self.angle
@@ -270,11 +291,10 @@ function Lander:update()
             gameState = "crashed"
             self.thrustParticles = {}
             self:createExplosion()
-            local crashReason = ""
             if not inLandingZone then
-                crashReason = "Outside landing zone!"
+                crashReason = "Missed"
             elseif math.abs(self.vy) > MAX_SAFE_LANDING_SPEED or math.abs(self.vx) > MAX_SAFE_LANDING_SPEED then
-                crashReason = "Too fast!"
+                crashReason = "Too Fast"
             else
                 -- Re-normalize angle for crash reason check
                 local normalizedAngle = self.angle
@@ -282,9 +302,9 @@ function Lander:update()
                     normalizedAngle = normalizedAngle - 360
                 end
                 if math.abs(normalizedAngle) > MAX_SAFE_LANDING_ANGLE then
-                    crashReason = "Bad angle!"
+                    crashReason = "Crooked"
                 else
-                    crashReason = "Unknown crash!"
+                    crashReason = "Unknown"
                 end
             end
             print("Crash!", crashReason)
@@ -342,6 +362,7 @@ function initGame()
     -- Reset display flags but not the timer
     showLandingScore = false
     restartFlashTimer = 0
+    crashReason = ""
 
     -- Randomize gravity (0.1 ± 0.04)
     GRAVITY = 0.06 + math.random() * 0.08
@@ -421,6 +442,12 @@ function myGameSetUp()
     -- Clear the entire screen to black initially
     gfx.clear(gfx.kColorBlack)
 
+    -- Load high score
+    local data = playdate.datastore.read()
+    if data and data.highScore then
+        highScore = data.highScore
+    end
+
     -- Don't start the game immediately
 end
 
@@ -436,7 +463,7 @@ function playdate.update()
     if gameState == "start" then
         -- Create demo lander if it doesn't exist
         if not demoLander then
-            demoLander = Lander(70, GROUND_HEIGHT - 9)
+            demoLander = Lander(70, -20)
             demoLander.vx = 0
             demoLander.vy = 0
         end
@@ -465,7 +492,7 @@ function playdate.update()
         end
 
         -- Apply gravity
-        demoLander.vy = demoLander.vy + 0.1
+        demoLander.vy = demoLander.vy + 0.15
 
         -- Apply air resistance
         demoLander.vx = demoLander.vx * AIR_RESISTANCE
@@ -487,14 +514,13 @@ function playdate.update()
         -- Bounce off ground
         if newY >= GROUND_HEIGHT - 9 then
             newY = GROUND_HEIGHT - 9
-            demoLander.vy = -demoLander.vy * 0.3
+            demoLander.vy = -demoLander.vy * 0.5
             demoLander.vx = demoLander.vx * 0.8
         end
 
-        -- Bounce off ceiling
-        if newY < 10 then
-            newY = 10
-            demoLander.vy = -demoLander.vy * 0.5
+        -- Don't bounce off ceiling, just constrain position
+        if newY < -30 then
+            newY = -30
         end
 
         -- Handle crank for rotation
@@ -514,13 +540,27 @@ function playdate.update()
         end
 
         demoLander:moveTo(newX, newY)
+
+        -- Draw demo lander and ground first
+        gfx.sprite.update()
+
+        -- Draw ground for demo
+        gfx.setColor(gfx.kColorBlack)
+        gfx.fillRect(0, GROUND_HEIGHT, 400, 5)
+
+        -- Draw thrust effects for demo lander
+        if demoLander then
+            demoLander:drawThrust()
+        end
+
+        -- Now draw all UI elements on top
         gfx.setColor(gfx.kColorWhite)
         gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
 
         -- Draw "THE FALL" vertically above d-pad (left side)
         local leftX = 70
         local startY = 10
-        local letterSpacing = 28
+        local letterSpacing = 25
         local title = "THE FALL"
         -- Create bold effect by drawing multiple times
         for i = 1, #title do
@@ -539,83 +579,46 @@ function playdate.update()
 
         -- Draw instructions on the right side
         local instructionX = 200
-        local instructionY = 100
+        local instructionY = 110
         local lineSpacing = 30
 
         -- Crank to Steer
         gfx.drawText("Crank to Steer", instructionX, instructionY)
 
         -- Down or B for thrust
-        gfx.drawText("Down or B for thrust", instructionX, instructionY + lineSpacing)
+
+        gfx.drawText("Down for Thrust", instructionX, instructionY + lineSpacing)
 
         -- A to Start
-        gfx.drawText("A to Start", instructionX, instructionY + lineSpacing * 2)
+        gfx.drawText("Up to Start", instructionX, instructionY + lineSpacing * 2)
 
+        -- Draw crank warning if needed
+        if playdate.isCrankDocked() then
+            gfx.setLineWidth(2)
+            gfx.drawCircleAtPoint(instructionX - 20, instructionY + 9, 10)
+            gfx.fillRect(instructionX - 21, instructionY + 3, 2, 6)
+            gfx.fillCircleAtPoint(instructionX - 20, instructionY + 12, 1)
+        end
 
+        -- Draw high score at bottom left
+        if highScore > 0 then
+            local highScoreText = string.format("High Score: %d", highScore)
+            gfx.drawText(highScoreText, instructionX, 218)
+        end
 
-        -- Check for A button to start, but only if crank is undocked
-        if playdate.buttonJustPressed(playdate.kButtonA) and not playdate.isCrankDocked() then
+        -- Check for A or Up button to start, but only if crank is undocked
+        if (playdate.buttonJustPressed(playdate.kButtonA) or playdate.buttonJustPressed(playdate.kButtonUp)) and not playdate.isCrankDocked() then
             -- Start a new session
             gameTimer = 60
             totalScore = 0
             sessionActive = true
+            newHighScore = false
             -- Remove demo lander
             if demoLander then
                 demoLander:remove()
                 demoLander = nil
             end
             initGame()
-        end
-
-        -- Draw demo lander and ground
-        gfx.sprite.update()
-
-        -- Draw ground for demo
-        gfx.setColor(gfx.kColorBlack)
-        gfx.fillRect(0, GROUND_HEIGHT, 400, 5)
-
-        -- Draw thrust effects for demo lander
-        if demoLander then
-            demoLander:drawThrust()
-        end
-
-        -- Draw title and instructions after sprites
-        gfx.setColor(gfx.kColorWhite)
-        gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-
-        -- Redraw "THE FALL" on top
-        local leftX = 70
-        local startY = 10
-        local letterSpacing = 25
-        local title = "THE FALL"
-        for i = 1, #title do
-            local letter = title:sub(i, i)
-            if letter ~= " " then
-                local letterWidth = gfx.getTextSize(letter)
-                local x = leftX - letterWidth / 2
-                local y = startY + (i - 1) * letterSpacing
-                gfx.drawText(letter, x, y)
-                gfx.drawText(letter, x + 1, y)
-                gfx.drawText(letter, x, y + 1)
-                gfx.drawText(letter, x + 1, y + 1)
-            end
-        end
-
-        -- Redraw instructions
-        local instructionX = 200
-        local instructionY = 100
-        local lineSpacing = 30
-
-        gfx.drawText("Crank to Steer", instructionX, instructionY)
-        gfx.drawText("Down or B for Thrust", instructionX, instructionY + lineSpacing)
-        gfx.drawText("A to Start", instructionX, instructionY + lineSpacing * 2)
-
-        -- Redraw crank warning if needed
-        if playdate.isCrankDocked() then
-            gfx.setLineWidth(2)
-            gfx.drawCircleAtPoint(instructionX - 20, instructionY + 10, 10)
-            gfx.fillRect(instructionX - 21, instructionY + 4, 2, 6)
-            gfx.fillCircleAtPoint(instructionX - 20, instructionY + 13, 1)
         end
 
         return
@@ -722,7 +725,7 @@ function playdate.update()
     if sessionActive and gameState ~= "start" then
         gfx.setColor(gfx.kColorWhite)
         gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
-        local timerText = string.format("%d", math.max(0, math.floor(gameTimer)))
+        local timerText = string.format("%d", math.max(0, math.ceil(gameTimer)))
         local timerWidth = gfx.getTextSize(timerText)
         -- Draw bold by rendering multiple times
         gfx.drawText(timerText, 200 - timerWidth / 2, 5)
@@ -736,6 +739,13 @@ function playdate.update()
             if gameTimer <= 0 then
                 gameTimer = 0
                 sessionActive = false
+                -- Check for new high score
+                if totalScore > highScore then
+                    highScore = totalScore
+                    newHighScore = true
+                    -- Save high score
+                    playdate.datastore.write({ highScore = highScore })
+                end
                 -- End the session regardless of current state
                 if gameState == "playing" or gameState == "landed" or gameState == "crashed" then
                     -- Make lander explode if still playing
@@ -753,7 +763,9 @@ function playdate.update()
         gfx.setColor(gfx.kColorWhite)
         gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
         local scoreText = ""
-        if showLandingScore and (gameState == "landed" or gameState == "crashed") then
+        if gameState == "crashed" and crashReason ~= "" then
+            scoreText = crashReason
+        elseif showLandingScore and gameState == "landed" then
             scoreText = string.format("+%d", lastLandingScore)
         else
             scoreText = string.format("%d", totalScore)
@@ -761,6 +773,8 @@ function playdate.update()
         local scoreWidth = gfx.getTextSize(scoreText)
         gfx.drawText(scoreText, 400 - scoreWidth - 5, 5)
     end
+
+
 
     -- Draw restart indicator (flashing circle with down arrow) when landed or crashed
     -- But only if session is still active
@@ -786,6 +800,11 @@ function playdate.update()
                 initGame()
             elseif not sessionActive then
                 -- Session ended, go back to start screen
+                -- Remove lander sprite before returning to title screen
+                if lander then
+                    lander:remove()
+                    lander = nil
+                end
                 gameState = "start"
             end
         end
@@ -803,6 +822,13 @@ function playdate.update()
 
         -- Score stays at top right (already handled by normal score display)
 
+        -- Show NEW HIGH SCORE if applicable
+        if newHighScore then
+            local newHighText = "NEW HIGH SCORE"
+            local newHighWidth = gfx.getTextSize(newHighText)
+            gfx.drawText(newHighText, 400 - newHighWidth - 5, 25)
+        end
+
         -- Draw blinking A button indicator in top left
         restartFlashTimer = restartFlashTimer + 1
         if math.floor(restartFlashTimer / 15) % 2 == 0 then -- Flash every 0.5 seconds
@@ -813,15 +839,20 @@ function playdate.update()
             -- Draw small "A" inside using lines
             gfx.setLineWidth(1)
             -- Left diagonal
-            gfx.drawLine(18, 17, 20, 11)
+            gfx.drawLine(16, 18, 19, 10)
             -- Right diagonal
-            gfx.drawLine(22, 17, 20, 11)
+            gfx.drawLine(22, 18, 19, 10)
             -- Horizontal crossbar
-            gfx.drawLine(19, 14, 21, 14)
+            gfx.drawLine(17, 16, 21, 16)
         end
 
         -- Check for A button to return to start
         if playdate.buttonJustPressed(playdate.kButtonA) then
+            -- Remove lander sprite before returning to title screen
+            if lander then
+                lander:remove()
+                lander = nil
+            end
             gameState = "start"
         end
     end
