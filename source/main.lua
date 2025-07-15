@@ -3,6 +3,7 @@ import "CoreLibs/graphics"
 import "CoreLibs/sprites"
 import "CoreLibs/timer"
 import "CoreLibs/crank"
+import "scoring"
 
 local gfx <const> = playdate.graphics
 
@@ -16,12 +17,20 @@ local AIR_RESISTANCE <const> = 0.99
 
 -- Game state
 local lander = nil
-local gameState = "start"   -- "start", "playing", "landed", "crashed"
-local trees = {}            -- Store tree positions and types
-local clouds = {}           -- Store cloud positions and properties
-local landingZoneX = 150    -- Starting X position of landing zone
-local landingZoneWidth = 70 -- Landing zone width in pixels
-local wind = 0              -- Wind force (-negative = left, +positive = right)
+local gameState = "start"             -- "start", "playing", "landed", "crashed", "session_ended"
+local trees = {}                      -- Store tree positions and types
+local clouds = {}                     -- Store cloud positions and properties
+local landingZoneX = 150              -- Starting X position of landing zone
+local landingZoneWidth = 70           -- Landing zone width in pixels (will be randomized)
+local wind = 0                        -- Wind force (-negative = left, +positive = right)
+local DEFAULT_LANDING_ZONE_WIDTH = 70 -- Default landing zone width
+local gameTimer = 60                  -- 60 second game timer
+local totalScore = 0                  -- Running total score
+local lastLandingScore = 0            -- Score from last landing
+local showLandingScore = false        -- Whether to show +#### score
+local restartFlashTimer = 0           -- Timer for flashing restart indicator
+local sessionActive = false           -- Whether a timed session is active
+local demoLander = nil                -- Demo lander for title screen
 
 -- Lander class
 class('Lander').extends(gfx.sprite)
@@ -77,8 +86,8 @@ function Lander:init(x, y)
 end
 
 function Lander:update()
-    -- Update explosion particles even when crashed
-    if gameState == "crashed" then
+    -- Update explosion particles even when crashed or session ended
+    if gameState == "crashed" or gameState == "session_ended" then
         for i = #self.explosionParticles, 1, -1 do
             local p = self.explosionParticles[i]
             p.x += p.vx
@@ -244,7 +253,18 @@ function Lander:update()
             self.vx = 0
             self.vy = 0
             self.thrustParticles = {}
-            print("Safe landing!")
+            -- Calculate score
+            local score = scoring.calculateScore(GRAVITY, wind, landingZoneX, landingZoneWidth)
+            lastLandingScore = score
+            totalScore = totalScore + score
+            showLandingScore = true
+
+            -- Print score breakdown to console
+            print("Safe landing! Score:", score)
+            local details = scoring.getDetailedDisplay()
+            for _, detail in ipairs(details) do
+                print(detail)
+            end
         else
             -- Crash
             gameState = "crashed"
@@ -316,6 +336,13 @@ function initGame()
     -- Reset game state
     gameState = "playing"
 
+    -- Start scoring timer
+    scoring.startGame()
+
+    -- Reset display flags but not the timer
+    showLandingScore = false
+    restartFlashTimer = 0
+
     -- Randomize gravity (0.1 ± 0.04)
     GRAVITY = 0.06 + math.random() * 0.08
 
@@ -324,6 +351,11 @@ function initGame()
 
     -- Create lander
     lander = Lander(200, 50)
+
+    -- Randomize landing zone width (0.5x to 1.5x default)
+    -- Min: 35 pixels (half), Max: 105 pixels (1.5x)
+    local sizeMultiplier = 0.5 + math.random() * 1.0
+    landingZoneWidth = math.floor(DEFAULT_LANDING_ZONE_WIDTH * sizeMultiplier)
 
     -- Generate random landing zone position (ensure it fits on screen)
     landingZoneX = math.random(10, 400 - landingZoneWidth - 10)
@@ -402,6 +434,86 @@ function playdate.update()
 
     -- Check for start state
     if gameState == "start" then
+        -- Create demo lander if it doesn't exist
+        if not demoLander then
+            demoLander = Lander(70, GROUND_HEIGHT - 9)
+            demoLander.vx = 0
+            demoLander.vy = 0
+        end
+
+        -- Update demo lander physics
+        if playdate.buttonIsPressed(playdate.kButtonB) or playdate.buttonIsPressed(playdate.kButtonDown) then
+            -- Calculate thrust vector based on angle
+            local thrustAngle = math.rad(demoLander.angle - 90)
+            demoLander.vx = demoLander.vx + math.cos(thrustAngle) * THRUST_POWER
+            demoLander.vy = demoLander.vy + math.sin(thrustAngle) * THRUST_POWER
+            demoLander.thrusting = true
+
+            -- Create thrust particles
+            if math.random() < 0.8 then
+                local particle = {
+                    x = demoLander.x - math.cos(thrustAngle) * 8,
+                    y = demoLander.y - math.sin(thrustAngle) * 8,
+                    vx = -math.cos(thrustAngle) * 1 + (math.random() - 0.5) * 0.5,
+                    vy = -math.sin(thrustAngle) * 1 + (math.random() - 0.5) * 0.5,
+                    life = 10
+                }
+                table.insert(demoLander.thrustParticles, particle)
+            end
+        else
+            demoLander.thrusting = false
+        end
+
+        -- Apply gravity
+        demoLander.vy = demoLander.vy + 0.1
+
+        -- Apply air resistance
+        demoLander.vx = demoLander.vx * AIR_RESISTANCE
+        demoLander.vy = demoLander.vy * AIR_RESISTANCE
+
+        -- Update position
+        local newX = demoLander.x + demoLander.vx
+        local newY = demoLander.y + demoLander.vy
+
+        -- Bounce off sides
+        if newX < 10 then
+            newX = 10
+            demoLander.vx = -demoLander.vx * 0.5
+        elseif newX > 390 then
+            newX = 390
+            demoLander.vx = -demoLander.vx * 0.5
+        end
+
+        -- Bounce off ground
+        if newY >= GROUND_HEIGHT - 9 then
+            newY = GROUND_HEIGHT - 9
+            demoLander.vy = -demoLander.vy * 0.3
+            demoLander.vx = demoLander.vx * 0.8
+        end
+
+        -- Bounce off ceiling
+        if newY < 10 then
+            newY = 10
+            demoLander.vy = -demoLander.vy * 0.5
+        end
+
+        -- Handle crank for rotation
+        local crankPosition = playdate.getCrankPosition()
+        demoLander.angle = crankPosition
+        demoLander:setRotation(demoLander.angle)
+
+        -- Update thrust particles
+        for i = #demoLander.thrustParticles, 1, -1 do
+            local p = demoLander.thrustParticles[i]
+            p.x = p.x + p.vx
+            p.y = p.y + p.vy
+            p.life = p.life - 1
+            if p.life <= 0 then
+                table.remove(demoLander.thrustParticles, i)
+            end
+        end
+
+        demoLander:moveTo(newX, newY)
         gfx.setColor(gfx.kColorWhite)
         gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
 
@@ -425,75 +537,87 @@ function playdate.update()
             end
         end
 
-        -- Draw "THRUST" vertically above B button (right side, upper)
-        local thrustX = 280
-        local thrustY = 10
-        local thrustLetterSpacing = 25
-        local thrust = "THRUST"
-        for i = 1, #thrust do
-            local letter = thrust:sub(i, i)
-            local letterWidth = gfx.getTextSize(letter)
-            gfx.drawText(letter, thrustX - letterWidth / 2, thrustY + (i - 1) * thrustLetterSpacing)
-        end
-        -- Draw arrow under THRUST
-        gfx.setLineWidth(2)
-        gfx.drawLine(thrustX - 5, thrustY + #thrust * thrustLetterSpacing + 5, thrustX,
-            thrustY + #thrust * thrustLetterSpacing + 10)
-        gfx.drawLine(thrustX + 5, thrustY + #thrust * thrustLetterSpacing + 5, thrustX,
-            thrustY + #thrust * thrustLetterSpacing + 10)
+        -- Draw instructions on the right side
+        local instructionX = 200
+        local instructionY = 100
+        local lineSpacing = 30
 
-        -- Draw "START" vertically above A button (right side, lower)
-        local startX = 365
-        local startY = 10
-        local startLetterSpacing = 25
-        local startText = "START"
-        for i = 1, #startText do
-            local letter = startText:sub(i, i)
-            local letterWidth = gfx.getTextSize(letter)
-            gfx.drawText(letter, startX - letterWidth / 2, startY + (i - 1) * startLetterSpacing)
-        end
-        -- Draw arrow under START
-        gfx.drawLine(startX - 5, startY + #startText * startLetterSpacing + 5, startX,
-            startY + #startText * startLetterSpacing + 10)
-        gfx.drawLine(startX + 5, startY + #startText * startLetterSpacing + 5, startX,
-            startY + #startText * startLetterSpacing + 10)
+        -- Crank to Steer
+        gfx.drawText("Crank to Steer", instructionX, instructionY)
 
-        -- Draw "STEER" horizontally in bottom right with arrow
-        local steerText = "STEER"
-        local steerX = 276
-        local steerY = 200
-        local steerLetterSpacing = 20
+        -- Down or B for thrust
+        gfx.drawText("Down or B for thrust", instructionX, instructionY + lineSpacing)
 
-        -- Draw exclamation mark indicator if crank is docked
-        if playdate.isCrankDocked() then
-            -- Single offset variables for exclamation mark position
-            local exclamationOffsetX = -25
-            local exclamationOffsetY = 7
-            local exclamationX = steerX + exclamationOffsetX
-            local exclamationY = steerY + exclamationOffsetY
+        -- A to Start
+        gfx.drawText("A to Start", instructionX, instructionY + lineSpacing * 2)
 
-            -- Draw circle outline
-            gfx.setLineWidth(2)
-            gfx.drawCircleAtPoint(exclamationX, exclamationY, 10)
-            -- Draw exclamation mark inside
-            gfx.fillRect(exclamationX - 1, exclamationY - 6, 2, 6)
-            gfx.fillCircleAtPoint(exclamationX, exclamationY + 3, 1)
-        end
-        -- Draw each letter with spacing
-        local currentX = steerX
-        for i = 1, #steerText do
-            local letter = steerText:sub(i, i)
-            gfx.drawText(letter, currentX, steerY)
-            currentX = currentX + steerLetterSpacing
-        end
-        -- Draw arrow after STEER, centered at cap height
-        gfx.drawLine(currentX + 4, steerY + 3, currentX + 9, steerY + 8)
-        gfx.drawLine(currentX + 4, steerY + 13, currentX + 9, steerY + 8)
+
 
         -- Check for A button to start, but only if crank is undocked
         if playdate.buttonJustPressed(playdate.kButtonA) and not playdate.isCrankDocked() then
+            -- Start a new session
+            gameTimer = 60
+            totalScore = 0
+            sessionActive = true
+            -- Remove demo lander
+            if demoLander then
+                demoLander:remove()
+                demoLander = nil
+            end
             initGame()
         end
+
+        -- Draw demo lander and ground
+        gfx.sprite.update()
+
+        -- Draw ground for demo
+        gfx.setColor(gfx.kColorBlack)
+        gfx.fillRect(0, GROUND_HEIGHT, 400, 5)
+
+        -- Draw thrust effects for demo lander
+        if demoLander then
+            demoLander:drawThrust()
+        end
+
+        -- Draw title and instructions after sprites
+        gfx.setColor(gfx.kColorWhite)
+        gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+
+        -- Redraw "THE FALL" on top
+        local leftX = 70
+        local startY = 10
+        local letterSpacing = 25
+        local title = "THE FALL"
+        for i = 1, #title do
+            local letter = title:sub(i, i)
+            if letter ~= " " then
+                local letterWidth = gfx.getTextSize(letter)
+                local x = leftX - letterWidth / 2
+                local y = startY + (i - 1) * letterSpacing
+                gfx.drawText(letter, x, y)
+                gfx.drawText(letter, x + 1, y)
+                gfx.drawText(letter, x, y + 1)
+                gfx.drawText(letter, x + 1, y + 1)
+            end
+        end
+
+        -- Redraw instructions
+        local instructionX = 200
+        local instructionY = 100
+        local lineSpacing = 30
+
+        gfx.drawText("Crank to Steer", instructionX, instructionY)
+        gfx.drawText("Down or B for Thrust", instructionX, instructionY + lineSpacing)
+        gfx.drawText("A to Start", instructionX, instructionY + lineSpacing * 2)
+
+        -- Redraw crank warning if needed
+        if playdate.isCrankDocked() then
+            gfx.setLineWidth(2)
+            gfx.drawCircleAtPoint(instructionX - 20, instructionY + 10, 10)
+            gfx.fillRect(instructionX - 21, instructionY + 4, 2, 6)
+            gfx.fillCircleAtPoint(instructionX - 20, instructionY + 13, 1)
+        end
+
         return
     end
 
@@ -579,8 +703,8 @@ function playdate.update()
         lander:drawThrust()
     end
 
-    -- Draw speed warning symbol if too fast
-    if lander and (math.abs(lander.vy) > MAX_SAFE_LANDING_SPEED or math.abs(lander.vx) > MAX_SAFE_LANDING_SPEED) then
+    -- Draw speed warning symbol if too fast (only when playing)
+    if gameState == "playing" and lander and (math.abs(lander.vy) > MAX_SAFE_LANDING_SPEED or math.abs(lander.vx) > MAX_SAFE_LANDING_SPEED) then
         -- Draw circle outline
         gfx.setColor(gfx.kColorWhite)
         gfx.setLineWidth(2)
@@ -594,28 +718,111 @@ function playdate.update()
 
 
 
-    -- Draw minimal game state indicators
-    -- Single starting coordinate for easy positioning
-    local indicatorX = 380
-    local indicatorY = 10
+    -- Draw timer at top center (show during session)
+    if sessionActive and gameState ~= "start" then
+        gfx.setColor(gfx.kColorWhite)
+        gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+        local timerText = string.format("%d", math.max(0, math.floor(gameTimer)))
+        local timerWidth = gfx.getTextSize(timerText)
+        -- Draw bold by rendering multiple times
+        gfx.drawText(timerText, 200 - timerWidth / 2, 5)
+        gfx.drawText(timerText, 200 - timerWidth / 2 + 1, 5)
+        gfx.drawText(timerText, 200 - timerWidth / 2, 6)
+        gfx.drawText(timerText, 200 - timerWidth / 2 + 1, 6)
 
-    if gameState == "landed" then
-        -- Draw a checkmark
-        gfx.setColor(gfx.kColorWhite)
-        gfx.setLineWidth(2)
-        gfx.drawLine(indicatorX, indicatorY + 5, indicatorX + 5, indicatorY + 10)
-        gfx.drawLine(indicatorX + 5, indicatorY + 10, indicatorX + 15, indicatorY)
-        if playdate.buttonJustPressed(playdate.kButtonA) then
-            initGame()
+        -- Update timer
+        if sessionActive then
+            gameTimer = gameTimer - (1 / 30) -- Assuming 30 FPS
+            if gameTimer <= 0 then
+                gameTimer = 0
+                sessionActive = false
+                -- End the session regardless of current state
+                if gameState == "playing" or gameState == "landed" or gameState == "crashed" then
+                    -- Make lander explode if still playing
+                    if gameState == "playing" and lander then
+                        lander:createExplosion()
+                    end
+                    gameState = "session_ended"
+                end
+            end
         end
-    elseif gameState == "crashed" then
-        -- Draw an X
+    end
+
+    -- Draw score at top right (always show during session)
+    if sessionActive or gameState == "session_ended" then
         gfx.setColor(gfx.kColorWhite)
-        gfx.setLineWidth(2)
-        gfx.drawLine(indicatorX, indicatorY, indicatorX + 10, indicatorY + 10)
-        gfx.drawLine(indicatorX + 10, indicatorY, indicatorX, indicatorY + 10)
+        gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+        local scoreText = ""
+        if showLandingScore and (gameState == "landed" or gameState == "crashed") then
+            scoreText = string.format("+%d", lastLandingScore)
+        else
+            scoreText = string.format("%d", totalScore)
+        end
+        local scoreWidth = gfx.getTextSize(scoreText)
+        gfx.drawText(scoreText, 400 - scoreWidth - 5, 5)
+    end
+
+    -- Draw restart indicator (flashing circle with down arrow) when landed or crashed
+    -- But only if session is still active
+    if (gameState == "landed" or gameState == "crashed") and sessionActive then
+        restartFlashTimer = restartFlashTimer + 1
+        if math.floor(restartFlashTimer / 15) % 2 == 0 then -- Flash every 0.5 seconds
+            gfx.setColor(gfx.kColorWhite)
+            gfx.setLineWidth(2)
+            -- Draw circle
+            gfx.drawCircleAtPoint(20, 15, 10)
+            -- Draw down arrow inside
+            gfx.drawLine(20, 10, 20, 18)
+            gfx.drawLine(17, 15, 20, 18)
+            gfx.drawLine(23, 15, 20, 18)
+        end
+
+        -- Check for down or B button to restart
+        if playdate.buttonJustPressed(playdate.kButtonDown) or playdate.buttonJustPressed(playdate.kButtonB) then
+            -- Only allow restart if session is still active
+            if sessionActive and gameTimer > 0 then
+                -- When restarting, clear the landing score display
+                showLandingScore = false
+                initGame()
+            elseif not sessionActive then
+                -- Session ended, go back to start screen
+                gameState = "start"
+            end
+        end
+    end
+
+    -- Handle session ended state
+    if gameState == "session_ended" then
+        gfx.setColor(gfx.kColorWhite)
+        gfx.setImageDrawMode(gfx.kDrawModeFillWhite)
+
+        -- Display "Game Over" at top
+        local gameOverText = "Game Over"
+        local gameOverWidth = gfx.getTextSize(gameOverText)
+        gfx.drawText(gameOverText, 200 - gameOverWidth / 2, 5)
+
+        -- Score stays at top right (already handled by normal score display)
+
+        -- Draw blinking A button indicator in top left
+        restartFlashTimer = restartFlashTimer + 1
+        if math.floor(restartFlashTimer / 15) % 2 == 0 then -- Flash every 0.5 seconds
+            gfx.setColor(gfx.kColorWhite)
+            gfx.setLineWidth(2)
+            -- Draw circle
+            gfx.drawCircleAtPoint(20, 15, 10)
+            -- Draw small "A" inside using lines
+            gfx.setLineWidth(1)
+            -- Left diagonal
+            gfx.drawLine(18, 17, 20, 11)
+            -- Right diagonal
+            gfx.drawLine(22, 17, 20, 11)
+            -- Horizontal crossbar
+            gfx.drawLine(19, 14, 21, 14)
+        end
+
+        -- Check for A button to return to start
         if playdate.buttonJustPressed(playdate.kButtonA) then
-            initGame()
+            gameState = "start"
         end
     end
 
