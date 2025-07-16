@@ -49,12 +49,12 @@ function landingSound()
 
         -- Classic "ta da" sound - optimized for Playdate speaker
         local noteProgressions = {
-            { "C3", "G3" }, -- Landing 1: Mid range start
-            { "E3", "B3" }, -- Landing 2
-            { "G3", "D4" }, -- Landing 3
-            { "C4", "G4" }, -- Landing 4: Middle C range
-            { "E4", "B4" }, -- Landing 5
-            { "G4", "D5" }, -- Landing 6
+            { "C4", "G4" }, -- Landing 1: Middle C (audible start)
+            { "D4", "A4" }, -- Landing 2
+            { "E4", "B4" }, -- Landing 3
+            { "F4", "C5" }, -- Landing 4
+            { "G4", "D5" }, -- Landing 5
+            { "A4", "E5" }, -- Landing 6
             { "C5", "G5" }  -- Landing 7+: Bright and clear
         }
 
