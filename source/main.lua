@@ -6,6 +6,92 @@ import "CoreLibs/crank"
 import "scoring"
 
 local gfx <const> = playdate.graphics
+local snd <const> = playdate.sound
+
+-- Sound effects using synthesizers
+local landingSynth = nil
+local crashSynth = nil
+local thrustSynth = nil
+local bounceSynth = nil
+local thrustIsPlaying = false
+
+-- Initialize sound effects
+local function initSounds()
+    -- Landing sound: pure tone from bass to violin-like
+    landingSynth = snd.synth.new(snd.kWaveSine)
+    landingSynth:setADSR(0.005, 0.02, 0.6, 0.15)
+    landingSynth:setVolume(0.9)
+
+    -- Crash sound: explosion noise
+    crashSynth = snd.synth.new(snd.kWaveNoise)
+    crashSynth:setADSR(0, 0.2, 0.1, 0.5)
+    crashSynth:setVolume(0.8)
+
+    -- Thrust sound: continuous whoosh (softer with fade in/out)
+    thrustSynth = snd.synth.new(snd.kWaveNoise)
+    thrustSynth:setADSR(0.3, 0.1, 0.5, 0.5) -- Softer attack, lower sustain, longer release
+    thrustSynth:setVolume(0.2)              -- Lower volume for softer sound
+
+    -- Bounce sound: quick pop (mellower tone)
+    bounceSynth = snd.synth.new(snd.kWaveTriangle)
+    bounceSynth:setADSR(0.01, 0.05, 0.1, 0.1)
+    bounceSynth:setVolume(0.5)
+end
+
+-- Play landing sound
+function landingSound()
+    if landingSynth then
+        -- Get sequential landing count for pitch adjustment
+        local landingCount = scoring.getSequentialLandings()
+
+        -- Add 1 to anticipate the increment that will happen when score is calculated
+        local nextLandingNumber = landingCount + 1
+
+        -- Classic "ta da" sound - optimized for Playdate speaker
+        local noteProgressions = {
+            { "C3", "G3" }, -- Landing 1: Mid range start
+            { "E3", "B3" }, -- Landing 2
+            { "G3", "D4" }, -- Landing 3
+            { "C4", "G4" }, -- Landing 4: Middle C range
+            { "E4", "B4" }, -- Landing 5
+            { "G4", "D5" }, -- Landing 6
+            { "C5", "G5" }  -- Landing 7+: Bright and clear
+        }
+
+        -- Select progression based on the next landing number (cap at 7)
+        local progressionIndex = math.min(nextLandingNumber, 7)
+        local notes = noteProgressions[progressionIndex]
+
+        -- Play classic "ta da" - two quick plucked notes
+        landingSynth:playNote(notes[1], 0.8, 0.08)
+        playdate.timer.performAfterDelay(100, function()
+            landingSynth:playNote(notes[2], 1.0, 0.15)
+        end)
+    end
+end
+
+-- Play crash sound
+-- Play crash/explosion sound
+function crashSound()
+    if crashSynth then
+        crashSynth:playNote("C2", 1.0, 0.5)
+    end
+end
+
+-- Play bounce sound
+function bounceSound(velocity)
+    if bounceSynth then
+        -- Scale pitch and volume based on impact velocity
+        local impactStrength = math.min(math.abs(velocity) / 5, 1.0)
+        local pitch = 100 + (impactStrength * 120)  -- 100Hz to 220Hz range (mellower high end)
+        local volume = 0.3 + (impactStrength * 0.4) -- 0.3 to 0.7 volume
+        bounceSynth:setVolume(volume)
+        bounceSynth:playNote(pitch, 1.0, 0.1)
+    end
+end
+
+-- Initialize sounds on startup
+initSounds()
 
 -- Game constants
 local GRAVITY = 0.1
@@ -41,34 +127,28 @@ class('Lander').extends(gfx.sprite)
 function Lander:init(x, y)
     Lander.super.init(self)
 
-    -- Create lander image with modern design
-    local landerSize = 8
-    local landerImage = gfx.image.new(landerSize * 2, landerSize * 2)
+    -- Create lander image with monitor/TV design (16x20)
+    local landerWidth = 16
+    local landerHeight = 20
+    local landerImage = gfx.image.new(landerWidth, landerHeight)
     gfx.pushContext(landerImage)
+
+    -- Draw the monitor body (rounded rectangle)
     gfx.setColor(gfx.kColorWhite)
-    gfx.fillRoundRect(0, 0, landerSize * 2, landerSize * 2, 1)
+    gfx.fillRoundRect(0, 0, landerWidth, 14, 3)
 
-    -- Engine nozzle (thruster trapezoid)
-    -- COORDINATE SYSTEM: (0,0) is top-left of the lander image
-    -- landerSize = 8, so the lander is a 16x16 pixel rounded rectangle
-    -- The lander spans from (0,0) to (16,16)
-    -- Center of lander is at (8,8)
-
+    -- Draw the screen (black rounded rectangle inside)
     gfx.setColor(gfx.kColorBlack)
-    gfx.setLineWidth(1)
+    gfx.fillRoundRect(3, 3, 10, 6, 2)
 
-    -- Thruster trapezoid
-    -- Left edge: from (3, 16) to (7, 9)
-    -- Start at bottom left of thruster, angle up and inward
-    gfx.drawLine(landerSize - 8, landerSize * 2, landerSize - 2, landerSize + 1)
-
-    -- Right edge: from (8, 9) to (12, 16)
-    -- Start at top right, angle down and outward
-    gfx.drawLine(landerSize + 2, landerSize + 1, landerSize + 7, landerSize * 2)
-
-    -- This creates a trapezoid nozzle that's wider at the bottom (9 pixels)
-    -- and narrower at the top (1 pixel gap), extending from the lander body
-
+    -- Draw the triangular base/stand
+    gfx.setColor(gfx.kColorWhite)
+    -- Triangle from bottom center spreading out
+    gfx.fillPolygon(
+        landerWidth / 2, 14,          -- Top center of triangle (connects to monitor)
+        2, landerHeight,              -- Bottom left
+        landerWidth - 2, landerHeight -- Bottom right
+    )
 
     gfx.popContext()
 
@@ -127,19 +207,31 @@ function Lander:update()
         self.vy += math.sin(thrustAngle) * THRUST_POWER
         self.thrusting = true
 
+        -- Start thrust sound if not already playing
+        if thrustSynth and not thrustIsPlaying then
+            thrustSynth:playNote("C2", 0.8, -1) -- Lower pitch and volume for softer sound
+            thrustIsPlaying = true
+        end
+
         -- Create thrust particles
         if math.random() < 0.8 then
             local particle = {
-                x = self.x - math.cos(thrustAngle) * 8,
-                y = self.y - math.sin(thrustAngle) * 8,
+                x = lander.x - math.cos(thrustAngle) * 10, -- Adjusted for new height
+                y = lander.y - math.sin(thrustAngle) * 10, -- Adjusted for new height
                 vx = -math.cos(thrustAngle) * 1 + (math.random() - 0.5) * 0.5,
                 vy = -math.sin(thrustAngle) * 1 + (math.random() - 0.5) * 0.5,
                 life = 10
             }
-            table.insert(self.thrustParticles, particle)
+            table.insert(lander.thrustParticles, particle)
         end
     else
         self.thrusting = false
+
+        -- Stop thrust sound if playing
+        if thrustSynth and thrustIsPlaying then
+            thrustSynth:stop()
+            thrustIsPlaying = false
+        end
     end
 
     -- Update thrust particles
@@ -164,14 +256,23 @@ function Lander:update()
     -- Keep lander on screen horizontally with bounce
     if newX < 10 then
         newX = 10
+        -- Only play sound if actually moving left
+        if self.vx < -0.5 then
+            bounceSound(self.vx)
+        end
         self.vx = -self.vx * 0.5
     elseif newX > 390 then
         newX = 390
+        -- Only play sound if actually moving right
+        if self.vx > 0.5 then
+            bounceSound(self.vx)
+        end
         self.vx = -self.vx * 0.5
     end
 
     -- Check tree collisions
-    local landerHalfSize = 8
+    local landerHalfWidth = 8
+    local landerHalfHeight = 10
     for _, tree in ipairs(trees) do
         local treeCollision = false
 
@@ -180,12 +281,12 @@ function Lander:update()
             local treeHeight = 27
             local treeWidth = 8
             -- More precise triangular collision
-            if newY > GROUND_HEIGHT - treeHeight - landerHalfSize and
-                newY < GROUND_HEIGHT + landerHalfSize then
+            if newY > GROUND_HEIGHT - treeHeight - landerHalfHeight and
+                newY < GROUND_HEIGHT + landerHalfHeight then
                 -- Calculate triangle width at lander's Y position
                 local yFromBottom = GROUND_HEIGHT - newY
                 local widthAtY = treeWidth * (yFromBottom / treeHeight)
-                if math.abs(newX - tree.x) < widthAtY + landerHalfSize then
+                if math.abs(newX - tree.x) < widthAtY + landerHalfWidth then
                     treeCollision = true
                 end
             end
@@ -197,44 +298,45 @@ function Lander:update()
             -- Check collision with circular top
             local dx = newX - tree.x
             local dy = newY - treeTopY
-            if dx * dx + dy * dy < (radius + landerHalfSize) * (radius + landerHalfSize) then
+            local effectiveRadius = math.max(landerHalfWidth, landerHalfHeight)
+            if dx * dx + dy * dy < (radius + effectiveRadius) * (radius + effectiveRadius) then
                 treeCollision = true
             end
             -- Check collision with trunk
-            if newX > tree.x - 2 - landerHalfSize and
-                newX < tree.x + 2 + landerHalfSize and
-                newY > GROUND_HEIGHT - trunkHeight - landerHalfSize and
-                newY < GROUND_HEIGHT + landerHalfSize then
+            if newX > tree.x - 2 - landerHalfWidth and
+                newX < tree.x + 2 + landerHalfWidth and
+                newY > GROUND_HEIGHT - trunkHeight - landerHalfHeight and
+                newY < GROUND_HEIGHT + landerHalfHeight then
                 treeCollision = true
             end
         else
             -- Palm tree collision (trunk + fronds)
             local trunkHeight = 18
             -- Check trunk collision
-            if newX > tree.x - 2 - landerHalfSize and
-                newX < tree.x + 2 + landerHalfSize and
-                newY > GROUND_HEIGHT - trunkHeight - landerHalfSize and
-                newY < GROUND_HEIGHT + landerHalfSize then
+            if newX > tree.x - 2 - landerHalfWidth and
+                newX < tree.x + 2 + landerHalfWidth and
+                newY > GROUND_HEIGHT - trunkHeight - landerHalfHeight and
+                newY < GROUND_HEIGHT + landerHalfHeight then
                 treeCollision = true
             end
             -- Check frond collision (three lines)
             local frondY = GROUND_HEIGHT - trunkHeight
             -- Check if lander is in frond area
-            if newY > frondY - 9 - landerHalfSize and newY < frondY + landerHalfSize then
+            if newY > frondY - 9 - landerHalfHeight and newY < frondY + landerHalfHeight then
                 -- Check collision with each frond line
                 -- Left frond
-                if math.abs(newX - (tree.x - 4.5)) < 4.5 + landerHalfSize and
-                    math.abs(newY - (frondY - 2.5)) < 2.5 + landerHalfSize then
+                if math.abs(newX - (tree.x - 4.5)) < 4.5 + landerHalfWidth and
+                    math.abs(newY - (frondY - 2.5)) < 2.5 + landerHalfHeight then
                     treeCollision = true
                 end
                 -- Right frond
-                if math.abs(newX - (tree.x + 4.5)) < 4.5 + landerHalfSize and
-                    math.abs(newY - (frondY - 2.5)) < 2.5 + landerHalfSize then
+                if math.abs(newX - (tree.x + 4.5)) < 4.5 + landerHalfWidth and
+                    math.abs(newY - (frondY - 2.5)) < 2.5 + landerHalfHeight then
                     treeCollision = true
                 end
                 -- Center frond
-                if math.abs(newX - tree.x) < 1 + landerHalfSize and
-                    math.abs(newY - (frondY - 4.5)) < 4.5 + landerHalfSize then
+                if math.abs(newX - tree.x) < 1 + landerHalfWidth and
+                    math.abs(newY - (frondY - 4.5)) < 4.5 + landerHalfHeight then
                     treeCollision = true
                 end
             end
@@ -245,6 +347,7 @@ function Lander:update()
             crashReason = "Tree"
             self.thrustParticles = {}
             self:createExplosion()
+            scoring.resetSequentialLandings()
             print("Crash! Hit a tree!")
             break
         end
@@ -252,9 +355,9 @@ function Lander:update()
 
     -- Check ground collision
     -- Lander needs to be 1px above the dither pattern (which starts at GROUND_HEIGHT)
-    if newY >= GROUND_HEIGHT - 9 then
+    if newY >= GROUND_HEIGHT - 12 then -- Adjusted for new height (20px height, so half is 10, plus 2)
         -- Check if in landing zone (entire ship must be within zone, with 4px buffer)
-        local shipHalfWidth = 8 -- Ship is 16 pixels wide
+        local shipHalfWidth = 8        -- Ship is 16 pixels wide
         local inLandingZone = newX - shipHalfWidth >= landingZoneX - 4 and
             newX + shipHalfWidth <= landingZoneX + landingZoneWidth + 4
 
@@ -270,10 +373,21 @@ function Lander:update()
             inLandingZone then
             -- Safe landing
             gameState = "landed"
-            newY = GROUND_HEIGHT - 9
+            newY = GROUND_HEIGHT - 10
             self.vx = 0
             self.vy = 0
             self.thrustParticles = {}
+
+            -- Stop thrust sound if playing
+            if thrustSynth and thrustIsPlaying then
+                thrustSynth:stop()
+                thrustIsPlaying = false
+            end
+
+            -- Play landing sound
+            if landingSound then
+                landingSound()
+            end
             -- Calculate score
             local score = scoring.calculateScore(GRAVITY, wind, landingZoneX, landingZoneWidth)
             lastLandingScore = score
@@ -291,6 +405,7 @@ function Lander:update()
             gameState = "crashed"
             self.thrustParticles = {}
             self:createExplosion()
+            scoring.resetSequentialLandings()
             if not inLandingZone then
                 crashReason = "Missed"
             elseif math.abs(self.vy) > MAX_SAFE_LANDING_SPEED or math.abs(self.vx) > MAX_SAFE_LANDING_SPEED then
@@ -315,6 +430,17 @@ function Lander:update()
 end
 
 function Lander:createExplosion()
+    -- Stop thrust sound if playing
+    if thrustSynth and thrustIsPlaying then
+        thrustSynth:stop()
+        thrustIsPlaying = false
+    end
+
+    -- Play crash sound
+    if crashSound then
+        crashSound()
+    end
+
     -- Create explosion particles
     for i = 1, 15 do
         local angle = math.random() * math.pi * 2
@@ -476,11 +602,17 @@ function playdate.update()
             demoLander.vy = demoLander.vy + math.sin(thrustAngle) * THRUST_POWER
             demoLander.thrusting = true
 
+            -- Start thrust sound if not already playing
+            if thrustSynth and not thrustIsPlaying then
+                thrustSynth:playNote("C2", 0.8, -1) -- Same as main game thrust
+                thrustIsPlaying = true
+            end
+
             -- Create thrust particles
             if math.random() < 0.8 then
                 local particle = {
-                    x = demoLander.x - math.cos(thrustAngle) * 8,
-                    y = demoLander.y - math.sin(thrustAngle) * 8,
+                    x = demoLander.x - math.cos(thrustAngle) * 10, -- Adjusted for new height
+                    y = demoLander.y - math.sin(thrustAngle) * 10, -- Adjusted for new height
                     vx = -math.cos(thrustAngle) * 1 + (math.random() - 0.5) * 0.5,
                     vy = -math.sin(thrustAngle) * 1 + (math.random() - 0.5) * 0.5,
                     life = 10
@@ -489,6 +621,12 @@ function playdate.update()
             end
         else
             demoLander.thrusting = false
+
+            -- Stop thrust sound if playing
+            if thrustSynth and thrustIsPlaying then
+                thrustSynth:stop()
+                thrustIsPlaying = false
+            end
         end
 
         -- Apply gravity
@@ -505,15 +643,27 @@ function playdate.update()
         -- Bounce off sides
         if newX < 10 then
             newX = 10
+            -- Only play sound if actually moving left
+            if demoLander.vx < -0.5 then
+                bounceSound(demoLander.vx)
+            end
             demoLander.vx = -demoLander.vx * 0.5
         elseif newX > 390 then
             newX = 390
+            -- Only play sound if actually moving right
+            if demoLander.vx > 0.5 then
+                bounceSound(demoLander.vx)
+            end
             demoLander.vx = -demoLander.vx * 0.5
         end
 
         -- Bounce off ground
         if newY >= GROUND_HEIGHT - 9 then
             newY = GROUND_HEIGHT - 9
+            -- Only play sound if actually falling with some velocity
+            if demoLander.vy > 1.0 then
+                bounceSound(demoLander.vy)
+            end
             demoLander.vy = -demoLander.vy * 0.5
             demoLander.vx = demoLander.vx * 0.8
         end
@@ -590,7 +740,18 @@ function playdate.update()
         gfx.drawText("Down for Thrust", instructionX, instructionY + lineSpacing)
 
         -- A to Start
-        gfx.drawText("Up to Start", instructionX, instructionY + lineSpacing * 2)
+        gfx.drawText("A to Start", instructionX, instructionY + lineSpacing * 2)
+
+        -- Draw chevron pointing to "A to Start" if crank is undocked
+        if not playdate.isCrankDocked() then
+            gfx.setColor(gfx.kColorWhite)
+            gfx.setLineWidth(2)
+            -- Draw chevron pointing right
+            local chevronX = instructionX - 10
+            local chevronY = instructionY + lineSpacing * 2 + 8
+            gfx.drawLine(chevronX - 5, chevronY - 5, chevronX, chevronY)
+            gfx.drawLine(chevronX - 5, chevronY + 5, chevronX, chevronY)
+        end
 
         -- Draw crank warning if needed
         if playdate.isCrankDocked() then
@@ -606,13 +767,19 @@ function playdate.update()
             gfx.drawText(highScoreText, instructionX, 218)
         end
 
-        -- Check for A or Up button to start, but only if crank is undocked
-        if (playdate.buttonJustPressed(playdate.kButtonA) or playdate.buttonJustPressed(playdate.kButtonUp)) and not playdate.isCrankDocked() then
+        -- Check for A button to start, but only if crank is undocked
+        if playdate.buttonJustPressed(playdate.kButtonA) and not playdate.isCrankDocked() then
             -- Start a new session
             gameTimer = 60
             totalScore = 0
+            scoring.resetSequentialLandings()
             sessionActive = true
             newHighScore = false
+            -- Stop thrust sound if playing
+            if thrustSynth and thrustIsPlaying then
+                thrustSynth:stop()
+                thrustIsPlaying = false
+            end
             -- Remove demo lander
             if demoLander then
                 demoLander:remove()
@@ -739,6 +906,7 @@ function playdate.update()
             if gameTimer <= 0 then
                 gameTimer = 0
                 sessionActive = false
+                scoring.resetSequentialLandings()
                 -- Check for new high score
                 if totalScore > highScore then
                     highScore = totalScore
@@ -772,6 +940,16 @@ function playdate.update()
         end
         local scoreWidth = gfx.getTextSize(scoreText)
         gfx.drawText(scoreText, 400 - scoreWidth - 5, 5)
+
+        -- Draw sequential landing multiplier below score
+        if (gameState == "playing" or gameState == "landed") and sessionActive then
+            local sequentialCount = scoring.getSequentialLandings()
+            if sequentialCount > 0 then
+                local multiplierText = string.format("x%d", sequentialCount)
+                local multiplierWidth = gfx.getTextSize(multiplierText)
+                gfx.drawText(multiplierText, 400 - multiplierWidth - 5, 22)
+            end
+        end
     end
 
 
@@ -785,14 +963,12 @@ function playdate.update()
             gfx.setLineWidth(2)
             -- Draw circle
             gfx.drawCircleAtPoint(20, 15, 10)
-            -- Draw down arrow inside
-            gfx.drawLine(20, 10, 20, 18)
-            gfx.drawLine(17, 15, 20, 18)
-            gfx.drawLine(23, 15, 20, 18)
+            -- Draw up triangle inside
+            gfx.fillTriangle(20, 10, 16, 18, 24, 18)
         end
 
-        -- Check for down or B button to restart
-        if playdate.buttonJustPressed(playdate.kButtonDown) or playdate.buttonJustPressed(playdate.kButtonB) then
+        -- Check for up button to restart
+        if playdate.buttonJustPressed(playdate.kButtonUp) then
             -- Only allow restart if session is still active
             if sessionActive and gameTimer > 0 then
                 -- When restarting, clear the landing score display

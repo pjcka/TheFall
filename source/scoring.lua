@@ -22,6 +22,7 @@ local DEFAULT_LANDING_ZONE_WIDTH = 70 -- Standard landing zone width
 local startTime = nil
 local finalScore = 0
 local scoreBreakdown = {}
+local sequentialLandings = 0
 
 -- Initialize scoring for a new game
 function scoring.startGame()
@@ -34,8 +35,10 @@ function scoring.startGame()
         windMultiplier = 1.0,
         distanceMultiplier = 1.0,
         sizeMultiplier = 1.0,
+        sequentialMultiplier = 1.0,
         totalScore = 0
     }
+    -- Don't reset sequential landings here - only reset on crash or session end
 end
 
 -- Calculate time-based score component
@@ -169,8 +172,13 @@ function scoring.calculateScore(gravity, wind, landingZoneX, landingZoneWidth)
     local distanceMultiplier = calculateDistanceMultiplier(landingZoneX, landingZoneWidth)
     local sizeMultiplier = calculateSizeMultiplier(landingZoneWidth)
 
+    -- Increment sequential landings and calculate multiplier
+    sequentialLandings = sequentialLandings + 1
+    local sequentialMultiplier = sequentialLandings
+
     -- Calculate final score
-    local totalMultiplier = gravityMultiplier * windMultiplier * distanceMultiplier * sizeMultiplier
+    local totalMultiplier = gravityMultiplier * windMultiplier * distanceMultiplier * sizeMultiplier *
+    sequentialMultiplier
     finalScore = math.floor(timeScore * totalMultiplier)
 
     -- Store breakdown for display
@@ -183,6 +191,7 @@ function scoring.calculateScore(gravity, wind, landingZoneX, landingZoneWidth)
         windMultiplier = windMultiplier,
         distanceMultiplier = distanceMultiplier,
         sizeMultiplier = sizeMultiplier,
+        sequentialMultiplier = sequentialMultiplier,
         totalMultiplier = totalMultiplier,
         totalScore = finalScore
     }
@@ -237,6 +246,7 @@ function scoring.getDetailedDisplay()
     table.insert(details, string.format("Wind Difficulty: x%.2f", scoreBreakdown.windMultiplier))
     table.insert(details, string.format("Edge Landing: x%.2f", scoreBreakdown.distanceMultiplier))
     table.insert(details, string.format("Target Size: x%.2f", scoreBreakdown.sizeMultiplier))
+    table.insert(details, string.format("Sequential Landing: x%d", scoreBreakdown.sequentialMultiplier))
 
     -- Total
     table.insert(details, "")
@@ -259,6 +269,16 @@ function scoring.getConditionsSummary(gravity, wind)
 
     return string.format("Gravity: %d%% | Wind: %s%.3f",
         math.floor(gravityPercent), windDirection, math.abs(wind))
+end
+
+-- Reset sequential landings counter (call on crash or session end)
+function scoring.resetSequentialLandings()
+    sequentialLandings = 0
+end
+
+-- Get current sequential landing count
+function scoring.getSequentialLandings()
+    return sequentialLandings
 end
 
 -- Module is now available globally as 'scoring'
